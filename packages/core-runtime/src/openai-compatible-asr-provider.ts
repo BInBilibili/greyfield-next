@@ -29,7 +29,8 @@ export class OpenAICompatibleASRProvider implements ASRProvider {
       const form = new FormData();
       form.append("model", this.options.model.trim());
       form.append("response_format", "json");
-      form.append("file", new Blob([audio.slice().buffer], { type: "audio/webm" }), "greyfield-microphone.webm");
+      const wav = String.fromCharCode(...audio.slice(0, 4)) === "RIFF";
+      form.append("file", new Blob([audio.slice().buffer], { type: wav ? "audio/wav" : "audio/webm" }), `greyfield-microphone.${wav ? "wav" : "webm"}`);
       const response = await fetchImpl(`${trimTrailingSlash(this.options.baseUrl)}/audio/transcriptions`, {
         method: "POST",
         headers: {
@@ -42,11 +43,8 @@ export class OpenAICompatibleASRProvider implements ASRProvider {
         throw new Error(`OpenAI-compatible ASR request failed: ${response.status} ${response.statusText}`.trim());
       }
       const payload = (await response.json()) as { text?: unknown };
-      const text = typeof payload.text === "string" ? payload.text.trim() : "";
-      if (text.length === 0) {
-        throw new Error("OpenAI-compatible ASR returned an empty transcript.");
-      }
-      return text;
+      if (typeof payload.text !== "string") throw new Error("OpenAI-compatible ASR returned an invalid transcript response.");
+      return payload.text.trim();
     } catch (error) {
       if (controller.signal.aborted && error instanceof DOMException && error.name === "AbortError") {
         throw new Error("OpenAI-compatible ASR request timed out or was stopped.");
