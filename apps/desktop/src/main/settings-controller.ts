@@ -48,7 +48,7 @@ export class SettingsController {
           taskModels: { ...this.config.provider.taskModels, ...patch.provider?.taskModels }
         };
         syncPatchedPairedTaskModelFields(provider, patch.provider?.taskModels);
-        this.config = mergeConfig({
+        const candidate = mergeConfig({
           ...this.config,
           ...patch,
           provider,
@@ -60,7 +60,9 @@ export class SettingsController {
           ui: { ...this.config.ui, ...patch.ui },
           memory: { ...this.config.memory, ...patch.memory }
         });
-        await this.save(this.config);
+        await this.save(candidate);
+        // Publish only persisted state; a later notification failure must not undo the commit.
+        this.config = candidate;
         const next = this.getCurrent();
         this.emitChanged(next);
         this.pendingUpdateFailed = false;
