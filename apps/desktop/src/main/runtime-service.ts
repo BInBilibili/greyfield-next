@@ -1,5 +1,6 @@
 import {
   GreyfieldRuntime,
+  ProactiveScreenLifecycle,
   InMemorySessionStore,
   LLMBackedMemoryAtomExtractor,
   MemoryManager,
@@ -153,6 +154,7 @@ export interface ProactiveDesktopCheckResult {
     | "no_screen_context"
     | "stale_screen_context"
     | "screen_awareness_in_flight"
+    | "screen_awareness_cancelled"
     | "vision_model_missing"
     | "vision_model_not_ready"
     | "screen_awareness_cooldown"
@@ -180,7 +182,10 @@ export class RuntimeService {
   private testingVoice = false;
   private lastInterruptedAtMs: number | undefined;
   private lastScreenAwarenessProactiveAtMs: number | undefined;
-  private screenAwarenessProactiveInFlight = false;
+  private lastScreenAwarenessAttemptAtMs: number | undefined;
+  private readonly proactiveScreenLifecycle = new ProactiveScreenLifecycle();
+  private screenAwarenessEnabled = true;
+  private shuttingDown = false;
 
   // New memory system (V2)
   private memoryStoresV2?: MemoryStoresV2;
@@ -313,6 +318,8 @@ export class RuntimeService {
    * Flush unindexed turns and close the memory stores. Called on app quit.
    */
   async shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    this.proactiveScreenLifecycle.dispose();
     await this.options.webTools?.dispose?.().catch(() => {});
     if (this.memoryManagerV2) {
       try {
@@ -328,6 +335,7 @@ export class RuntimeService {
   }
 
   updateConfig(config: GreyfieldConfig): void {
+    this.cancelProactiveScreenAwareness();
     const previousThreadId = this.threadId;
     const previousProviderTestFingerprint = providerTestFingerprint(this.config);
     this.config = mergeConfig(config);
@@ -345,10 +353,41 @@ export class RuntimeService {
     this.providerTestGeneration += 1;
   }
 
-  async handle(input: RuntimeInputEvent, emit: RuntimeEventHandler): Promise<void> {
-    if (input.type === "runtime.interrupt") {
-      this.lastInterruptedAtMs = Date.now();
+  setScreenAwarenessEnabled(enabled: boolean): void {
+    if (this.screenAwarenessEnabled !== enabled) {
+      this.cancelProactiveScreenAwareness();
+      // Explicit off/on starts a fresh screen mode, unlike ordinary input/config saves.
+      this.lastScreenAwarenessProactiveAtMs = undefined;
     }
+    this.screenAwarenessEnabled = enabled;
+  }
+
+  /** Main reserves input priority before neko/capture awaits; direct callers do so in handle. */
+  beginUserInput(input: RuntimeInputEvent): () => void {
+    if (!["runtime.interrupt", "text.input", "audio.input", "audio.chunk", "audio.end"].includes(input.type)) {
+      return () => {};
+    }
+    if (input.type === "runtime.interrupt") this.lastInterruptedAtMs = Date.now();
+    this.lastScreenAwarenessAttemptAtMs = undefined;
+    return this.proactiveScreenLifecycle.suspendForInput();
+  }
+
+  private cancelProactiveScreenAwareness(): void {
+    this.proactiveScreenLifecycle.cancel();
+    // A cancelled attempt may retry, but an already published remark keeps its quiet interval.
+    this.lastScreenAwarenessAttemptAtMs = undefined;
+  }
+
+  async handle(input: RuntimeInputEvent, emit: RuntimeEventHandler): Promise<void> {
+    const release = this.beginUserInput(input);
+    try {
+      await this.handleInput(input, emit);
+    } finally {
+      release();
+    }
+  }
+
+  private async handleInput(input: RuntimeInputEvent, emit: RuntimeEventHandler): Promise<void> {
     if (input.type === "runtime.interrupt" && this.activeRuntime) {
       const runtime = this.activeRuntime;
       try {
@@ -646,20 +685,22 @@ export class RuntimeService {
   async checkProactiveScreenAwareness(input: {
     attachments: RuntimeImageAttachment[];
     observation?: RuntimeObservationInput;
-  }): Promise<ProactiveDesktopCheckResult> {
-    if (!this.config.ui.proactiveMemoryEnabled || this.config.ui.proactivityLevel <= 0) {
+  }, publish?: (message: ProactiveDesktopMessage) => void): Promise<ProactiveDesktopCheckResult> {
+    if (this.shuttingDown || !this.screenAwarenessEnabled || !this.config.ui.proactiveMemoryEnabled || this.config.ui.proactivityLevel <= 0) {
       return { displayed: false, reason: "disabled" };
     }
-    if (this.activeRuntime) {
+    if (this.activeRuntime || this.proactiveScreenLifecycle.inputPending) {
       return { displayed: false, reason: "active_runtime" };
     }
     if (this.lastInterruptedAtMs !== undefined && Date.now() - this.lastInterruptedAtMs < proactiveInterruptCooldownMs) {
       return { displayed: false, reason: "recent_interrupt" };
     }
-    if (this.screenAwarenessProactiveInFlight) {
+    if (this.proactiveScreenLifecycle.inFlight) {
       return { displayed: false, reason: "screen_awareness_in_flight" };
     }
-    if (this.lastScreenAwarenessProactiveAtMs !== undefined && Date.now() - this.lastScreenAwarenessProactiveAtMs < screenAwarenessProactiveCooldownMs) {
+    if ([this.lastScreenAwarenessProactiveAtMs, this.lastScreenAwarenessAttemptAtMs].some(
+      (at) => at !== undefined && Date.now() - at < screenAwarenessProactiveCooldownMs
+    )) {
       return { displayed: false, reason: "screen_awareness_cooldown" };
     }
     const attachments = input.attachments.filter((attachment) => attachment.dataUrl.startsWith(`data:${attachment.mimeType};base64,`));
@@ -680,8 +721,7 @@ export class RuntimeService {
       return { displayed: false, reason: "vision_model_not_ready" };
     }
 
-    this.screenAwarenessProactiveInFlight = true;
-    this.lastScreenAwarenessProactiveAtMs = Date.now();
+    this.lastScreenAwarenessAttemptAtMs = Date.now();
     try {
       const messages: ChatMessage[] = [
         {
@@ -708,29 +748,21 @@ export class RuntimeService {
           ]
         }
       ];
-      let text = "";
-      for await (const chunk of llm.stream(messages)) {
-        text += chunk;
-        if (text.length > 240) {
-          break;
-        }
+      const result = await this.proactiveScreenLifecycle.run(llm, messages);
+      if (!result || !this.proactiveScreenLifecycle.canPublish(result)) {
+        return { displayed: false, reason: "screen_awareness_cancelled" };
       }
-      const normalized = text.replace(/\s+/g, " ").trim();
+      const normalized = result.text;
       if (normalized.length === 0) {
         return { displayed: false, reason: "no_screen_context" };
       }
       this.lastScreenAwarenessProactiveAtMs = Date.now();
-      return {
-        displayed: true,
-        message: {
-          text: normalized,
-          createdAt: new Date().toISOString()
-        }
-      };
+      const message = { text: normalized, createdAt: new Date().toISOString() };
+      // Publish synchronously under the generation guard, not in an await caller.
+      publish?.(message);
+      return { displayed: true, message };
     } catch {
       return { displayed: false, reason: "vision_model_not_ready" };
-    } finally {
-      this.screenAwarenessProactiveInFlight = false;
     }
   }
 
