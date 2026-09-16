@@ -1,6 +1,6 @@
 import type { ChatMessage, LLMProvider } from "./providers";
 
-export type ProviderDiagnosticCode = "received" | "preview" | "base-url" | "api-key" | "model" | "invalid-url" | "unauthorized" | "forbidden" | "not-found" | "unavailable" | "timeout" | "stream" | "empty" | "network" | "save";
+export type ProviderDiagnosticCode = "received" | "preview" | "base-url" | "api-key" | "model" | "invalid-url" | "unauthorized" | "forbidden" | "not-found" | "unavailable" | "timeout" | "stream" | "empty" | "network" | "save" | "busy";
 export interface ProviderDiagnosticResult { ok: boolean; code: ProviderDiagnosticCode }
 
 // A deterministic blue square, not a screenshot or user attachment. Never enters a runtime turn.
@@ -29,10 +29,14 @@ export class ProviderDiagnostic {
     previous?.abort();
   }
 
-  async run(provider: LLMProvider | (() => Promise<LLMProvider | ProviderDiagnosticResult>), messages: ChatMessage[], timeoutMs = 30_000): Promise<ProviderDiagnosticResult | undefined> {
-    if (this.active) return undefined;
+  async run(provider: LLMProvider | (() => Promise<LLMProvider | ProviderDiagnosticResult>), messages: ChatMessage[], timeoutMs = 30_000, requesterSignal?: AbortSignal): Promise<ProviderDiagnosticResult | undefined> {
+    if (requesterSignal?.aborted) return undefined;
+    if (this.active) return { ok: false, code: "busy" };
     const controller = new AbortController();
     this.active = controller;
+    // A retired renderer may only cancel its own admission, never a replacement.
+    const cancelRequester = () => { if (this.active === controller) this.invalidate(); };
+    requesterSignal?.addEventListener("abort", cancelRequester, { once: true });
     if (typeof provider === "function") this.preparing = controller;
     let timedOut = false;
     const timeout = setTimeout(() => { timedOut = true; controller.abort(); },
@@ -65,6 +69,7 @@ export class ProviderDiagnostic {
       const result = await Promise.race([probe(), cancelled.then(result => received ? { ok: true, code: "received" } as const : result)]);
       return this.active === controller ? (timedOut ? { ok: false, code: "timeout" } : result) : undefined;
     } finally {
+      requesterSignal?.removeEventListener("abort", cancelRequester);
       clearTimeout(timeout);
       if (this.active === controller) this.active = undefined;
       if (this.preparing === controller) this.preparing = undefined;

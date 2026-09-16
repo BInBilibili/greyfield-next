@@ -55,7 +55,7 @@ describe("Settings vision diagnostic ownership", () => {
       return new Promise((_resolve, reject) => signal!.addEventListener("abort", () => reject(new Error("private-key"))));
     } });
     const pending = service.testVision();
-    expect(await service.testVision()).toBeUndefined();
+    expect(await service.testVision()).toEqual({ ok: false, code: "busy" });
     if (reason === "config") service.updateConfig({ ...config(), provider: { ...config().provider, taskModels: { ...config().provider.taskModels, vision: "new-vision" } } });
     if (reason === "shutdown") await service.shutdown();
     expect(await pending).toEqual(reason === "timeout" ? { ok: false, code: "timeout" } : undefined);
@@ -111,4 +111,38 @@ describe("Settings vision diagnostic ownership", () => {
     expect(JSON.stringify(await service.getRecentTurns(20))).not.toMatch(/built-in|data:image|Connectivity diagnostic/);
   });
 
+});
+
+
+describe("vision requester lifetime forwarding", () => {
+  it.each(["preparing", "streaming"])("retires %s work without blocking a saved-config retry", async phase => {
+    let releaseSave!: () => void;
+    const saved = new Promise<void>(resolve => { releaseSave = resolve; });
+    let started!: () => void;
+    const fetching = new Promise<void>(resolve => { started = resolve; });
+    let stall = true;
+    let transport: AbortSignal | undefined;
+    const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
+      if (!stall) return new Response(token);
+      transport = init?.signal as AbortSignal;
+      started();
+      return new Promise((_resolve, reject) => transport!.addEventListener("abort", () => reject(new Error("private upstream"))));
+    });
+    const service = new RuntimeService(config(), { fetch });
+    const requester = new AbortController();
+    const old = service.testVision(() => saved, requester.signal);
+    expect(await service.testVision(() => saved)).toEqual({ ok: false, code: "busy" });
+    if (phase === "streaming") { releaseSave(); await fetching; }
+    requester.abort();
+    expect(await old).toBeUndefined();
+    if (phase === "streaming") expect(transport?.aborted).toBe(true);
+    stall = false;
+    const fresh = service.testVision(() => saved, new AbortController().signal);
+    service.updateConfig({ ...config(), provider: { ...config().provider, taskModels: { ...config().provider.taskModels, vision: "saved-retry" } } });
+    releaseSave();
+    expect(await fresh).toEqual({ ok: true, code: "received" });
+    expect(fetch).toHaveBeenCalledTimes(phase === "streaming" ? 2 : 1);
+    expect(JSON.parse(fetch.mock.calls.at(-1)![1]!.body as string).model).toBe("saved-retry");
+    await service.shutdown();
+  });
 });

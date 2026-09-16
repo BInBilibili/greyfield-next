@@ -519,8 +519,24 @@ function handleRuntimeInput(payload: Parameters<NonNullable<typeof runtimeServic
 }
 
 async function testVisionProvider(sender: Electron.WebContents, requestId: string): Promise<void> {
-  const result = await runtimeService?.testVision(async () => { await settingsController?.awaitPendingUpdates(); });
-  if (result && !sender.isDestroyed()) sender.send("provider:test-vision-result", { ...result, requestId });
+  if (sender.isDestroyed()) return;
+  const requester = new AbortController();
+  const cancel = () => requester.abort();
+  const onNavigation = (details: Electron.WebContentsDidStartNavigationEventParams) => {
+    if (details.isMainFrame && !details.isSameDocument) cancel();
+  };
+  // WebContents survives reload. Bind this request to its document, not just the window.
+  sender.on("did-start-navigation", onNavigation);
+  sender.once("render-process-gone", cancel);
+  sender.once("destroyed", cancel);
+  try {
+    const result = await runtimeService?.testVision(async () => { await settingsController?.awaitPendingUpdates(); }, requester.signal);
+    if (result && !requester.signal.aborted && !sender.isDestroyed()) sender.send("provider:test-vision-result", { ...result, requestId });
+  } finally {
+    sender.removeListener("did-start-navigation", onNavigation);
+    sender.removeListener("render-process-gone", cancel);
+    sender.removeListener("destroyed", cancel);
+  }
 }
 
 async function testLLMProvider(): Promise<void> {

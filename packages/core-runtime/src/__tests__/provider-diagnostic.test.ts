@@ -19,7 +19,7 @@ describe("bounded provider diagnostic", () => {
       await new Promise<void>(resolve => options?.signal?.addEventListener("abort", () => resolve()));
     } };
     const old = diagnostic.run(hanging, VISION_DIAGNOSTIC_MESSAGES);
-    expect(await diagnostic.run(hanging, VISION_DIAGNOSTIC_MESSAGES)).toBeUndefined();
+    expect(await diagnostic.run(hanging, VISION_DIAGNOSTIC_MESSAGES)).toEqual({ ok: false, code: "busy" });
     diagnostic.invalidate();
     expect(await old).toBeUndefined();
     expect(await diagnostic.run({ async *stream() { yield "ok"; } }, VISION_DIAGNOSTIC_MESSAGES)).toEqual({ ok: true, code: "received" });
@@ -54,9 +54,61 @@ describe("bounded provider diagnostic", () => {
     }) }) }, VISION_DIAGNOSTIC_MESSAGES);
     rejectOld(new Error("late private-body"));
     await Promise.resolve();
-    expect(await diagnostic.run({ async *stream() { yield "wrong"; } }, VISION_DIAGNOSTIC_MESSAGES)).toBeUndefined();
+    expect(await diagnostic.run({ async *stream() { yield "wrong"; } }, VISION_DIAGNOSTIC_MESSAGES)).toEqual({ ok: false, code: "busy" });
     release({ value: "ok", done: false });
     expect(await fresh).toEqual({ ok: true, code: "received" });
   });
 
+});
+
+
+describe("diagnostic request lifetime", () => {
+  it("returns a terminal safe busy result without starting a competing provider", async () => {
+    const diagnostic = new ProviderDiagnostic();
+    const pending = diagnostic.run({ async *stream() { await new Promise(() => {}); } }, VISION_DIAGNOSTIC_MESSAGES);
+    try {
+      const result = await diagnostic.run({ async *stream() { throw new Error("must not start"); } }, VISION_DIAGNOSTIC_MESSAGES);
+      expect(result).toEqual({ ok: false, code: "busy" });
+    } finally { diagnostic.invalidate(); await pending; }
+  });
+
+  it("cancels preparing and streaming work when the requester lifetime ends", async () => {
+    const diagnostic = new ProviderDiagnostic();
+    const requester = new AbortController();
+    let release!: () => void;
+    let calls = 0;
+    const provider: LLMProvider = { async *stream() { calls++; yield "ok"; } };
+    const pending = diagnostic.run(async () => { await new Promise<void>(resolve => { release = resolve; }); return provider; }, VISION_DIAGNOSTIC_MESSAGES, 30, requester.signal);
+    requester.abort();
+    expect(await pending).toBeUndefined();
+    release(); await Promise.resolve();
+    expect(calls).toBe(0);
+    const freshRequester = new AbortController();
+    let transportSignal: AbortSignal | undefined;
+    const active = diagnostic.run({ async *stream(_m, _t, options) { transportSignal = options?.signal; await new Promise(() => {}); } }, VISION_DIAGNOSTIC_MESSAGES, 30, freshRequester.signal);
+    freshRequester.abort();
+    expect(await active).toBeUndefined();
+    expect(transportSignal?.aborted).toBe(true);
+    expect(await diagnostic.run(provider, VISION_DIAGNOSTIC_MESSAGES)).toEqual({ ok: true, code: "received" });
+  });
+});
+
+
+describe("requester cancellation isolation", () => {
+  it("ignores an already retired requester and a completed requester's later abort", async () => {
+    const diagnostic = new ProviderDiagnostic();
+    const retired = new AbortController();
+    retired.abort();
+    const provider: LLMProvider = { async *stream() { yield "ok"; } };
+    expect(await diagnostic.run(provider, VISION_DIAGNOSTIC_MESSAGES, 1000, retired.signal)).toBeUndefined();
+    const completed = new AbortController();
+    expect(await diagnostic.run(provider, VISION_DIAGNOSTIC_MESSAGES, 1000, completed.signal)).toEqual({ ok: true, code: "received" });
+    const current = new AbortController();
+    let signal: AbortSignal | undefined;
+    const pending = diagnostic.run({ async *stream(_m, _t, options) { signal = options?.signal; await new Promise(() => {}); } }, VISION_DIAGNOSTIC_MESSAGES, 1000, current.signal);
+    completed.abort();
+    expect(signal?.aborted).toBe(false);
+    expect(await diagnostic.run(provider, VISION_DIAGNOSTIC_MESSAGES)).toEqual({ ok: false, code: "busy" });
+    current.abort(); expect(await pending).toBeUndefined();
+  });
 });

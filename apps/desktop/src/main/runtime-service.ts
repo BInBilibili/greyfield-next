@@ -881,8 +881,8 @@ export class RuntimeService {
 
   invalidateVisionTest(): void { this.visionDiagnostic.invalidate(); }
 
-  async testVision(awaitSettings?: () => Promise<void>): Promise<ProviderDiagnosticResult | undefined> {
-    if (this.shuttingDown) return undefined;
+  async testVision(awaitSettings?: () => Promise<void>, requesterSignal?: AbortSignal): Promise<ProviderDiagnosticResult | undefined> {
+    if (this.shuttingDown || requesterSignal?.aborted) return undefined;
     const resolveProvider = (): LLMProvider | ProviderDiagnosticResult => {
       const code = this.providerFactory.validateVisionDiagnostic();
       if (code) return { ok: false, code };
@@ -892,11 +892,11 @@ export class RuntimeService {
       return this.visionDiagnostic.run(async () => {
         try { await awaitSettings(); } catch { return { ok: false, code: "save" }; }
         return resolveProvider();
-      }, VISION_DIAGNOSTIC_MESSAGES, this.options.llmTimeoutMs);
+      }, VISION_DIAGNOSTIC_MESSAGES, this.options.llmTimeoutMs, requesterSignal);
     }
     const provider = resolveProvider();
     if (!("stream" in provider)) return provider;
-    return this.visionDiagnostic.run(provider, VISION_DIAGNOSTIC_MESSAGES, this.options.llmTimeoutMs);
+    return this.visionDiagnostic.run(provider, VISION_DIAGNOSTIC_MESSAGES, this.options.llmTimeoutMs, requesterSignal);
   }
 
   async testLLM(): Promise<LLMTestResult | undefined> {

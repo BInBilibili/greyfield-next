@@ -166,7 +166,6 @@ export class DesktopRuntimeBridge {
   private personaCharacterFile = defaultGreyfieldConfig.characterFile;
   private speechPlaybackEpoch = 0;
   private visionRequestId?: string;
-  private visionRequestSequence = 0;
   private speechPlaybackChain: Promise<void> = Promise.resolve();
 
   constructor(private readonly host?: DesktopHostApi, private readonly speechOutput?: SpeechOutput) {
@@ -675,7 +674,8 @@ export class DesktopRuntimeBridge {
 
   testVisionProvider(): DesktopRendererState {
     if (this.state.visionTest.status === "testing") return this.getState();
-    const requestId = String(++this.visionRequestSequence);
+    // Request identity must survive a renderer reload in the same WebContents.
+    const requestId = globalThis.crypto.randomUUID();
     this.visionRequestId = requestId;
     this.state = { ...this.state, visionTest: this.host ? { status: "testing" } : { status: "error", code: "preview" } };
     this.host?.send("provider:test-vision", { requestId });

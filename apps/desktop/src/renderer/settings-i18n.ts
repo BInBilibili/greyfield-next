@@ -27,6 +27,7 @@ export type SettingsI18nKey =
   | "vision.empty"
   | "vision.network"
   | "vision.save"
+  | "vision.busy"
   | "nav.label"
   | "nav.model"
   | "nav.voice"
@@ -425,6 +426,7 @@ const enUS: Record<SettingsI18nKey, string> = {
   "vision.empty": "No reply token received. Check vision support and retry.",
   "vision.network": "Vision request failed. Check connection and model settings, then retry.",
   "vision.save": "Settings could not be saved. Save successfully before retrying.",
+  "vision.busy": "Another vision test is running. Wait for it to finish, then retry.",
 
   "advanced.settings": "Show advanced settings",
   "advanced.settings.close": "Hide advanced settings",
@@ -813,6 +815,7 @@ const zhCN: Partial<Record<SettingsI18nKey, string>> = {
   "vision.empty": "未收到回复 token，请检查视觉支持后重试。",
   "vision.network": "视觉请求失败，请检查连接和模型设置后重试。",
   "vision.save": "设置未能保存，请保存成功后重试。",
+  "vision.busy": "另一个视觉测试正在运行，请等待结束后重试。",
 
   "advanced.settings": "展开高级设置",
   "advanced.settings.close": "收起高级设置",

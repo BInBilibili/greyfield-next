@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { _electron as electron, type ElectronApplication, type Page, type Locator } from "playwright";
 import { defaultGreyfieldConfig } from "@greyfield/persistence/config-schema";
+import type { DesktopIpcEventMap } from "../../../apps/desktop/src/shared/ipc";
 import { VISION_DIAGNOSTIC_MESSAGES } from "@greyfield/core-runtime";
 import { getElectronExecutablePath } from "./electron-install";
 import { resolveLive2DFixturePath } from "./live2d-fixture";
@@ -20,7 +21,7 @@ const key = "local-vision-key";
 const privateMarker = "private-body-key-stack-marker";
 type Mode = "success" | "401" | "503" | "malformed" | "empty" | "timeout" | "abort";
 let mode: Mode = "success";
-const requests: Array<{ mode: Mode; model: string; closed: boolean }> = [];
+const requests: Array<{ mode: Mode; model: string; closed: boolean; closedAfterMs?: number }> = [];
 const server = createServer(async (req, res) => {
   const parts: Buffer[] = [];
   for await (const part of req) parts.push(Buffer.from(part));
@@ -29,9 +30,10 @@ const server = createServer(async (req, res) => {
   assert.equal(req.headers.authorization, `Bearer ${key}`);
   assert.deepEqual(body.messages, VISION_DIAGNOSTIC_MESSAGES);
   assert.equal(body.stream, true);
-  const request = { mode, model: body.model as string, closed: false };
+  const startedAt = performance.now();
+  const request: (typeof requests)[number] = { mode, model: body.model as string, closed: false };
   requests.push(request);
-  res.on("close", () => { request.closed = true; });
+  res.on("close", () => { request.closed = true; request.closedAfterMs = Math.round(performance.now() - startedAt); });
   if (mode === "401" || mode === "503") {
     res.writeHead(Number(mode), privateMarker, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: privateMarker })); return;
@@ -71,6 +73,15 @@ try {
     state.visionTestCaptureCalls = 0;
     const original = desktopCapturer.getSources.bind(desktopCapturer);
     desktopCapturer.getSources = options => { state.visionTestCaptureCalls++; return original(options); };
+  });
+  const lifecycleBaseline = await app.evaluate(({ BrowserWindow, ipcMain }) => {
+    const sender = BrowserWindow.getAllWindows().find(w => new URL(w.webContents.getURL()).searchParams.get("window") === "settings")!.webContents;
+    const state = globalThis as typeof globalThis & { visionRequestIds: string[] };
+    state.visionRequestIds = [];
+    ipcMain.on("provider:test-vision", (event, payload: { requestId: string }) => {
+      if (event.sender === sender) state.visionRequestIds.push(payload.requestId);
+    });
+    return { id: sender.id, listeners: ["did-start-navigation", "render-process-gone", "destroyed"].map(name => sender.listenerCount(name)) };
   });
   const messagesBefore = await chat.locator(".message-list .message-item").count();
   await controls.getByRole("button", { name: /Open settings|打开设置/i }).click();
@@ -135,6 +146,63 @@ try {
   await button.click(); await waitText(result, /not image understanding/);
   assert.equal(requests.at(-1)?.model, "new-vision");
   checks.push("pending edit cancels transport, invalidates result, restores button and retries new config");
+  // Actual document reloads in the same WebContents: once after many requests,
+  // then again while the new document's first request is pending.
+  for (let reload = 0; reload < 2; reload++) {
+    mode = "abort";
+    const beforeReload: number = requests.length;
+    await button.click();
+    await until(() => requests.length === beforeReload + 1);
+    const retiredRequest = requests.at(-1)!;
+    assert(await button.isDisabled());
+    if (reload === 0) {
+      // A second real IPC requester must get a terminal busy reply, not silence.
+      const busy = await chat.evaluate(() => new Promise<DesktopIpcEventMap["provider:test-vision-result"]>((resolve, reject) => {
+        const requestId = crypto.randomUUID();
+        const timer = setTimeout(() => { stop(); reject(new Error("Missing competing-request reply")); }, 1000);
+        const stop = window.greyfield!.on("provider:test-vision-result", reply => {
+          if (reply.requestId !== requestId) return;
+          clearTimeout(timer); stop(); resolve(reply);
+        });
+        window.greyfield!.send("provider:test-vision", { requestId });
+      }));
+      assert.equal(busy.ok, false); assert.equal(busy.code, "busy");
+      assert.equal(requests.length, beforeReload + 1);
+      checks.push("competing real IPC requester receives safe terminal busy without HTTP");
+      await settings.evaluate(() => { location.hash = "same-document-diagnostic-check"; });
+      assert(await button.isDisabled());
+      assert.equal(retiredRequest.closed, false, "Same-document navigation must not retire a request");
+      checks.push("same-document navigation preserves the pending request");
+    }
+    await settings.reload();
+    await entry.waitFor();
+    await fullyVisible(entry);
+    await entry.click();
+    await button.waitFor();
+    await until(() => retiredRequest.closed);
+    assert(retiredRequest.closedAfterMs! < 1000, "Reload must cancel transport before the 1500ms timeout");
+    assert(await button.isEnabled());
+    assert.equal(await result.getAttribute("data-status"), "idle");
+    await settings.waitForTimeout(150);
+    assert.equal(await result.getAttribute("data-status"), "idle", "Retired result became a stale success");
+    const currentId: number = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(w => new URL(w.webContents.getURL()).searchParams.get("window") === "settings")!.webContents.id);
+    assert.equal(currentId, lifecycleBaseline.id, "Must reload the same WebContents");
+  }
+  await settings.screenshot({ path: join(artifacts, "vision-reload-ready-en.png") });
+  mode = "success";
+  await button.click(); await waitText(result, /not image understanding/);
+  await until(() => requests.at(-1)?.closed === true);
+  assert(await button.isEnabled());
+  assert.equal(requests.at(-1)?.model, "new-vision");
+  await settings.screenshot({ path: join(artifacts, "vision-reload-retry-en.png") });
+  const lifecycleAfterReload = await app.evaluate(({ BrowserWindow }) => {
+    const sender = BrowserWindow.getAllWindows().find(w => new URL(w.webContents.getURL()).searchParams.get("window") === "settings")!.webContents;
+    return { ids: (globalThis as typeof globalThis & { visionRequestIds: string[] }).visionRequestIds,
+      listeners: ["did-start-navigation", "render-process-gone", "destroyed"].map(name => sender.listenerCount(name)) };
+  });
+  assert.equal(new Set(lifecycleAfterReload.ids).size, lifecycleAfterReload.ids.length);
+  assert.deepEqual(lifecycleAfterReload.listeners, lifecycleBaseline.listeners);
+  checks.push("two pending reloads keep WebContents, close old transport, never reuse IDs or accept stale success, retry succeeds and listeners return to baseline");
   // Use the ordinary advanced language control, not IPC navigation.
   await settings.locator('[data-harness="settings-advanced-toggle"]').click();
   await settings.locator(".settings-language-select select").selectOption("zh-CN");
@@ -188,12 +256,26 @@ try {
     assert(windows.displays.some(d => w.bounds.x < d.x+d.width && w.bounds.x+w.bounds.width > d.x && w.bounds.y < d.y+d.height && w.bounds.y+w.bounds.height > d.y));
   }
   assert.equal(windows.windows.find(w => w.role === "chat")?.visible, false);
+  // Retiring another real requester also frees admission without closing Settings.
+  mode = "abort";
+  const beforeDestroy = requests.length;
+  await chat.evaluate(() => window.greyfield!.send("provider:test-vision", { requestId: crypto.randomUUID() }));
+  await until(() => requests.length === beforeDestroy + 1);
+  const destroyedRequest = requests.at(-1)!;
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(w => new URL(w.webContents.getURL()).searchParams.get("window") === "chat")!.destroy());
+  await until(() => destroyedRequest.closed);
+  assert(destroyedRequest.closedAfterMs! < 1000, "Destruction must cancel transport before the 1500ms timeout");
+  mode = "success";
+  await button.click(); await waitText(result, /\u4e0d\u8bc1\u660e\u56fe\u50cf\u7406\u89e3/);
+  await until(() => requests.length === beforeDestroy + 2 && requests.at(-1)?.closed === true);
+  assert(await button.isEnabled());
+  checks.push("destroyed requester closes transport and Settings can retry independently");
   mode = "abort"; await button.click(); await until(() => requests.at(-1)?.mode === "abort");
   const shutdownRequest = requests.at(-1)!;
   await app.close(); app = undefined;
   await until(() => shutdownRequest.closed);
   checks.push("shutdown aborts; visible display bounds and non-fallback Live2D pixels verified");
-  const summary = { ok: true, checks, requests, nonTransparentPixels: pixels, ...windows, artifacts };
+  const summary = { ok: true, checks, requests, lifecycleBaseline, lifecycleAfterReload, nonTransparentPixels: pixels, ...windows, artifacts };
   await writeFile(join(artifacts, "summary.json"), JSON.stringify(summary,null,2));
   console.log(JSON.stringify(summary,null,2));
 } catch (error) {
