@@ -242,3 +242,131 @@ describe("SettingsController", () => {
     });
   });
 });
+
+function deferredSave() {
+  let resolve!: () => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<void>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+describe("SettingsController committed snapshots", () => {
+  it("exposes the previous snapshot while saving, then publishes the committed snapshot", async () => {
+    const pending = deferredSave();
+    const save = vi.fn(() => pending.promise);
+    const emit = vi.fn();
+    const controller = new SettingsController(defaultGreyfieldConfig, save, emit);
+    const initial = controller.getCurrent();
+    const update = controller.update({ provider: { taskModels: { vision: "pending-vision" } } });
+    await Promise.resolve();
+    expect(save).toHaveBeenCalledOnce();
+    const duringSave = controller.getCurrent();
+    const eventCount = emit.mock.calls.length;
+    pending.resolve();
+    const committed = await update;
+    expect(duringSave).toEqual(initial);
+    expect(eventCount).toBe(0);
+    expect(committed.provider.visionModel).toBe("pending-vision");
+    expect(controller.getCurrent()).toEqual(committed);
+    expect(emit).toHaveBeenCalledExactlyOnceWith(committed);
+  });
+
+  it.each([
+    { provider: { model: "failed-chat", visionModel: "failed-vision" } },
+    { provider: { taskModels: { chat: "failed-chat", vision: "failed-vision", voiceAsr: "failed-asr", voiceTts: "failed-tts" } } }
+  ])("keeps failure isolated and permits an explicit paired-field retry: %j", async (patch) => {
+    const failure = new Error("disk unavailable");
+    const save = vi.fn(async () => undefined).mockRejectedValueOnce(failure);
+    const emit = vi.fn();
+    const controller = new SettingsController(defaultGreyfieldConfig, save, emit);
+    const initial = controller.getCurrent();
+    await expect(controller.update(patch)).rejects.toBe(failure);
+    expect(controller.getCurrent()).toEqual(initial);
+    expect(emit).not.toHaveBeenCalled();
+    await expect(controller.awaitPendingUpdates()).rejects.toBe(failure);
+    await expect(controller.awaitPendingUpdates()).rejects.toBe(failure);
+    const retried = await controller.update(patch);
+    expect(retried.provider).toMatchObject({
+      model: "failed-chat",
+      visionModel: "failed-vision",
+      taskModels: { chat: "failed-chat", vision: "failed-vision" }
+    });
+    expect(retried.provider.asrModel).toBe(retried.provider.taskModels.voiceAsr);
+    expect(retried.provider.ttsModel).toBe(retried.provider.taskModels.voiceTts);
+    expect(retried.ui).toEqual(initial.ui);
+    await expect(controller.awaitPendingUpdates()).resolves.toBeUndefined();
+    expect(emit).toHaveBeenCalledExactlyOnceWith(retried);
+  });
+
+  it("merges queued edits from the last successful commit, not the failed middle write", async () => {
+    const blocked = deferredSave();
+    const failure = new Error("middle save failed");
+    const save = vi.fn(async (): Promise<void> => undefined)
+      .mockImplementationOnce(() => blocked.promise)
+      .mockRejectedValueOnce(failure);
+    const emit = vi.fn();
+    const controller = new SettingsController(defaultGreyfieldConfig, save, emit);
+    const first = controller.update({
+      provider: { taskModels: { chat: "committed-chat", vision: "committed-vision" } },
+      memory: { llmAtomExtractionEnabled: true }
+    });
+    const failed = controller.update({ provider: { taskModels: { chat: "failed-chat", vision: "failed-vision" } } });
+    const failedResult = expect(failed).rejects.toBe(failure);
+    const unrelated = controller.update({ ui: { proactivityLevel: 73 } });
+    const waiter = controller.awaitPendingUpdates();
+    blocked.resolve();
+    const committed = await first;
+    await failedResult;
+    const final = await unrelated;
+    await expect(waiter).resolves.toBeUndefined();
+    expect(final.provider).toEqual(committed.provider);
+    expect(final.memory).toEqual(committed.memory);
+    expect(final.ui.proactivityLevel).toBe(73);
+    expect(save).toHaveBeenCalledTimes(3);
+    expect(save).toHaveBeenLastCalledWith(final);
+    expect(emit.mock.calls.map(([config]) => config)).toEqual([committed, final]);
+    expect(controller.getCurrent()).toEqual(final);
+  });
+
+  it("includes updates appended while an existing waiter is blocked", async () => {
+    const firstSave = deferredSave();
+    const retrySave = deferredSave();
+    const failure = new Error("first save failed");
+    const save = vi.fn()
+      .mockImplementationOnce(() => firstSave.promise)
+      .mockImplementationOnce(() => retrySave.promise);
+    const controller = new SettingsController(defaultGreyfieldConfig, save, vi.fn());
+    const initial = controller.getCurrent();
+    const first = controller.update({ provider: { taskModels: { vision: "retry-vision" } } });
+    const failedResult = expect(first).rejects.toBe(failure);
+    let waited = false;
+    const waiter = controller.awaitPendingUpdates().then(() => { waited = true; });
+    const retry = controller.update({ provider: { taskModels: { vision: "retry-vision" } } });
+    firstSave.reject(failure);
+    await failedResult;
+    await Promise.resolve();
+    const duringRetry = controller.getCurrent();
+    const settledEarly = waited;
+    retrySave.resolve();
+    await retry;
+    await waiter;
+    expect(duringRetry).toEqual(initial);
+    expect(settledEarly).toBe(false);
+    expect(waited).toBe(true);
+    expect(controller.getCurrent().provider.visionModel).toBe("retry-vision");
+  });
+
+  it.each([new Error("synchronous save failure"), undefined])("does not publish when save throws synchronously: %s", async (failure) => {
+    const save = vi.fn(() => { throw failure; });
+    const emit = vi.fn();
+    const controller = new SettingsController(defaultGreyfieldConfig, save, emit);
+    const initial = controller.getCurrent();
+    await expect(controller.update({ provider: { taskModels: { vision: "unsaved" } } })).rejects.toBe(failure);
+    await expect(controller.awaitPendingUpdates()).rejects.toBe(failure);
+    expect(controller.getCurrent()).toEqual(initial);
+    expect(emit).not.toHaveBeenCalled();
+  });
+});
