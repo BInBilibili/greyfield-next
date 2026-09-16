@@ -50,7 +50,7 @@ describe("describeProviderStatus", () => {
       tone: "ready",
       label: "Ready to test",
       detail:
-        "Screen awareness needs a Vision model. Leave it empty to keep screenshots unavailable instead of sending them to the Chat model."
+        "Screen awareness needs Vision or Multimodal. Test LLM checks only chat; use Task models / Vision test for images."
     });
 
     state.settings.providerVisionModel = "mimo-vl";

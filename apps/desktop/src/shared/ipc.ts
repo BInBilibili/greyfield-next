@@ -157,6 +157,7 @@ export interface DesktopIpcRequestMap {
   "cascade:command": { action: "status" | "start" | "stop" | "error"; message?: string };
   "runtime:speech-playback": DesktopSpeechPlaybackEvent;
   "provider:test-llm": {};
+  "provider:test-vision": { requestId: string };
   "provider:test-voice": {};
   "memory:debug-request": {};
   "memory:summary-update": DesktopMemorySummaryUpdate;
@@ -204,6 +205,8 @@ export interface DesktopIpcEventMap {
   "neko:event": import("../../../../packages/neko-plugin/src/index").NekoPluginEvent;
   "cascade:state": { available: boolean; active: boolean; message: string };
   "provider:test-reset": {};
+  "provider:test-vision-reset": {};
+  "provider:test-vision-result": import("@greyfield/core-runtime").ProviderDiagnosticResult & { requestId: string };
   "session:continuity": {
     restoredRecentMessageCount: number;
     longTermMemoryEnabled: boolean;

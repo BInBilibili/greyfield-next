@@ -9,7 +9,7 @@
   >
     <header class="settings-section__header">
       <h2>{{ t("section.provider") }}</h2>
-      <span>{{ providerStatus.label }}</span>
+      <button type="button" class="task-model-shortcut" data-harness="task-model-shortcut" @click="openTaskModels">{{ t("vision.entry") }}</button>
     </header>
     <div class="settings-fields settings-fields--provider-first" data-harness="provider-first-fields">
       <label>
@@ -85,15 +85,28 @@
       <strong>{{ providerTestStatus.label }}</strong>
       <span>{{ providerTestStatus.detail }}</span>
     </p>
-    <details class="provider-advanced" data-harness="provider-advanced-models">
+    <details ref="taskModelsDetails" class="provider-advanced" data-harness="provider-advanced-models">
       <summary>{{ t("advanced.taskModels") }}</summary>
+      <section class="vision-diagnostic" data-harness="vision-diagnostic">
+        <p>{{ t("vision.detail") }}</p>
+        <label v-for="slot in visionTaskModelSlots" :key="slot.key" class="task-model-slot" :data-task-model-slot="slot.slot">
+          <span>{{ slot.label }}</span>
+          <input :aria-label="slot.label" :value="slot.value" autocomplete="off" spellcheck="false"
+            @input="emit('update-setting', slot.key, valueFrom($event))" />
+          <small>{{ slot.detail }}</small>
+        </label>
+        <button type="button" data-harness="test-vision" :disabled="state.visionTest.status === 'testing'" @click="emit('test-vision')">
+          {{ t(state.visionTest.status === "testing" ? "vision.testing" : "vision.test") }}
+        </button>
+        <p role="status" data-harness="vision-result" :data-status="state.visionTest.status">{{ visionResult }}</p>
+      </section>
       <div class="task-model-slots" :aria-label="t('field.taskModelSlots')">
         <header class="task-model-slots__header">
           <strong>{{ t("field.taskModelSlots") }}</strong>
           <span>{{ t("field.taskModelSlots.detail") }}</span>
         </header>
         <label
-          v-for="slot in advancedTaskModelSlots"
+          v-for="slot in otherTaskModelSlots"
           :key="slot.key"
           class="task-model-slot"
           :data-task-model-slot="slot.slot"
@@ -119,6 +132,7 @@ import type { DesktopRendererState, DesktopSettingsState } from "./desktop-runti
 import { valueFrom } from "./settings-dom-events";
 import { settingsT, type SettingsI18nKey, type SettingsLocale } from "./settings-i18n";
 import { describeProviderStatus } from "./settings-provider-status";
+import { describeVisionTest } from "./settings-test-vision";
 import { describeProviderTestStatus, describeTestLlmAction } from "./settings-test-llm";
 
 const props = defineProps<{
@@ -132,6 +146,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   "update-setting": [key: keyof DesktopSettingsState, value: string];
   "test-llm": [];
+  "test-vision": [];
 }>();
 
 const t = (key: SettingsI18nKey, values?: Record<string, string | number>): string =>
@@ -197,6 +212,15 @@ const advancedTaskModelSlots = computed<
     value: props.state.settings.providerTTSModel
   }
 ]);
+const visionTaskModelSlots = computed(() => advancedTaskModelSlots.value.filter(slot => ["vision", "multimodal"].includes(slot.slot)));
+const otherTaskModelSlots = computed(() => advancedTaskModelSlots.value.filter(slot => !["vision", "multimodal"].includes(slot.slot)));
+const visionResult = computed(() => describeVisionTest(props.state.visionTest, props.locale));
+const taskModelsDetails = ref<HTMLDetailsElement | null>(null);
+function openTaskModels(): void {
+  if (!taskModelsDetails.value) return;
+  taskModelsDetails.value.open = true;
+  taskModelsDetails.value.scrollIntoView({ block: "start", behavior: "smooth" });
+}
 const testLlmAction = computed(() =>
   describeTestLlmAction(
     props.stageStatus,

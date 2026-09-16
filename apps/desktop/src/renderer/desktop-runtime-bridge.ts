@@ -36,6 +36,7 @@ export interface DesktopRendererState {
   status: string;
   errorMessage: string;
   screenAwarenessNotice: string;
+  visionTest: { status: "idle" | "testing" | "success" | "error"; code?: import("@greyfield/core-runtime").ProviderDiagnosticCode };
   voiceErrorMessage: string;
   providerTest: {
     status: "idle" | "testing" | "success" | "error";
@@ -164,6 +165,7 @@ export class DesktopRuntimeBridge {
   private readonly interactionProfile = createDefaultInteractionProfile();
   private personaCharacterFile = defaultGreyfieldConfig.characterFile;
   private speechPlaybackEpoch = 0;
+  private visionRequestId?: string;
   private speechPlaybackChain: Promise<void> = Promise.resolve();
 
   constructor(private readonly host?: DesktopHostApi, private readonly speechOutput?: SpeechOutput) {
@@ -282,6 +284,17 @@ export class DesktopRuntimeBridge {
     });
     this.host?.on("proactive:message", (message) => {
       this.showProactiveMessage(message);
+    });
+    this.host?.on("provider:test-vision-reset", () => {
+      this.visionRequestId = undefined;
+      this.state = { ...this.state, visionTest: { status: "idle" } };
+      this.emitStateChange();
+    });
+    this.host?.on("provider:test-vision-result", (result) => {
+      if (result.requestId !== this.visionRequestId) return;
+      this.visionRequestId = undefined;
+      this.state = { ...this.state, visionTest: { status: result.ok ? "success" : "error", code: result.code } };
+      this.emitStateChange();
     });
     this.host?.on("provider:test-llm-result", (result) => {
       this.state = {
@@ -550,6 +563,10 @@ export class DesktopRuntimeBridge {
   }
 
   updateSettings(patch: DesktopSettingsPatch): DesktopRendererState {
+    if ([patch.providerLLM, patch.providerBaseUrl, patch.providerApiKey, patch.providerVisionModel, patch.providerMultimodalModel].some(value => value !== undefined)) {
+      this.visionRequestId = undefined;
+      this.state = { ...this.state, visionTest: { status: "idle" } };
+    }
     const providerConnectionChanged =
       patch.providerLLM !== undefined ||
       patch.providerBaseUrl !== undefined ||
@@ -652,6 +669,16 @@ export class DesktopRuntimeBridge {
       }
     };
     this.emitStateChange();
+    return this.getState();
+  }
+
+  testVisionProvider(): DesktopRendererState {
+    if (this.state.visionTest.status === "testing") return this.getState();
+    // Request identity must survive a renderer reload in the same WebContents.
+    const requestId = globalThis.crypto.randomUUID();
+    this.visionRequestId = requestId;
+    this.state = { ...this.state, visionTest: this.host ? { status: "testing" } : { status: "error", code: "preview" } };
+    this.host?.send("provider:test-vision", { requestId });
     return this.getState();
   }
 
@@ -1153,6 +1180,7 @@ export function createInitialDesktopRendererState(): DesktopRendererState {
     errorMessage: "",
     screenAwarenessNotice: "",
     voiceErrorMessage: "",
+    visionTest: { status: "idle" },
     providerTest: {
       status: "idle",
       message: ""

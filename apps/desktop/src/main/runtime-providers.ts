@@ -3,6 +3,7 @@ import {
   OpenAICompatibleLLMProvider,
   OpenAICompatibleTTSProvider,
   type ASRProvider,
+  type ProviderDiagnosticCode,
   type ChatMessage,
   type LLMProvider,
   type TTSProvider
@@ -57,6 +58,19 @@ export class RuntimeProviderFactory {
       });
     }
     return new MainFakeLLMProvider();
+  }
+
+  validateVisionDiagnostic(): ProviderDiagnosticCode | undefined {
+    if (this.config.provider.llm !== "openai-compatible") return "preview";
+    const { baseUrl, apiKey } = this.config.provider;
+    if (!baseUrl.trim()) return "base-url";
+    try {
+      const url = new URL(baseUrl);
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) return "invalid-url";
+    } catch { return "invalid-url"; }
+    if (!apiKey.trim()) return "api-key";
+    if (!this.resolveVisualTaskModel()) return "model";
+    return undefined;
   }
 
   createVisionLLMProvider(): LLMProvider | undefined {

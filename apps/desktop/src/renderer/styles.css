@@ -2181,3 +2181,12 @@ h1 {
     max-height: none;
   }
 }
+
+.task-model-shortcut { font-size: 12px; padding: 5px 8px; border: 1px solid #b6d7d2; border-radius: 6px; background: #f4faf9; color: #17634b; cursor: pointer; }
+.vision-diagnostic { display: grid; gap: 10px; padding: 12px; }
+.vision-diagnostic p { margin: 0; font-size: 12px; line-height: 1.5; }
+.vision-diagnostic [data-status="error"] { color: #9d2921; }
+.vision-diagnostic [data-status="success"] { color: #17634b; }
+
+.vision-diagnostic button { padding: 10px; border: 0; border-radius: 8px; background: #207c70; color: white; font-weight: 700; cursor: pointer; }
+.vision-diagnostic button:disabled { opacity: .6; cursor: wait; }

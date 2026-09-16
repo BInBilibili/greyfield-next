@@ -24,3 +24,5 @@ export * from "./stage-driver";
 export * from "./vision-attachments";
 
 export * from "./proactive-screen-lifecycle";
+
+export * from "./provider-diagnostic";

@@ -240,6 +240,10 @@ function registerIpc(): void {
     broadcastSpeechPlayback(payload);
   });
 
+  ipcMain.on("provider:test-vision", (event, payload: { requestId: string }) => {
+    void testVisionProvider(event.sender, payload.requestId);
+  });
+
   ipcMain.on("provider:test-llm", () => {
     void testLLMProvider();
   });
@@ -387,7 +391,14 @@ function registerIpc(): void {
     broadcastWindowState();
   });
 
-  ipcMain.on("settings:update", async (_event, patch: GreyfieldConfigPatch) => {
+  ipcMain.on("settings:update", async (event, patch: GreyfieldConfigPatch) => {
+    const provider = patch.provider;
+    if (provider && [provider.llm, provider.baseUrl, provider.apiKey, provider.visionModel, provider.taskModels?.vision, provider.taskModels?.multimodal].some(value => value !== undefined)) {
+      runtimeService?.invalidateVisionTest();
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (window.webContents !== event.sender) window.webContents.send("provider:test-vision-reset", {});
+      }
+    }
     if (providerPatchInvalidatesTest(patch.provider)) {
       runtimeService?.invalidateProviderTest();
       broadcastProviderTestReset();
@@ -505,6 +516,27 @@ function handleRuntimeInput(payload: Parameters<NonNullable<typeof runtimeServic
       release?.();
     }
   })();
+}
+
+async function testVisionProvider(sender: Electron.WebContents, requestId: string): Promise<void> {
+  if (sender.isDestroyed()) return;
+  const requester = new AbortController();
+  const cancel = () => requester.abort();
+  const onNavigation = (details: Electron.WebContentsDidStartNavigationEventParams) => {
+    if (details.isMainFrame && !details.isSameDocument) cancel();
+  };
+  // WebContents survives reload. Bind this request to its document, not just the window.
+  sender.on("did-start-navigation", onNavigation);
+  sender.once("render-process-gone", cancel);
+  sender.once("destroyed", cancel);
+  try {
+    const result = await runtimeService?.testVision(async () => { await settingsController?.awaitPendingUpdates(); }, requester.signal);
+    if (result && !requester.signal.aborted && !sender.isDestroyed()) sender.send("provider:test-vision-result", { ...result, requestId });
+  } finally {
+    sender.removeListener("did-start-navigation", onNavigation);
+    sender.removeListener("render-process-gone", cancel);
+    sender.removeListener("destroyed", cancel);
+  }
 }
 
 async function testLLMProvider(): Promise<void> {
