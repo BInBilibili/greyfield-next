@@ -96,3 +96,30 @@ describe("ProactiveScreenLifecycle", () => {
   });
 
 });
+
+describe("proactive screen input reservation", () => {
+  it("cancels pending Vision and keeps nested/overlapping holds independent and idempotent", async () => {
+    const lifecycle = new ProactiveScreenLifecycle();
+    const old = stalled();
+    const result = lifecycle.run(old.provider, []);
+    const releaseFirst = lifecycle.suspendForInput();
+    const releaseSecond = lifecycle.suspendForInput();
+    expect(old.signal?.aborted).toBe(true);
+    await expect(result).resolves.toBeUndefined();
+    releaseFirst();
+    releaseFirst();
+    lifecycle.cancel(); // Config/off must not release input priority.
+    expect(lifecycle.inputPending).toBe(true);
+    const fresh: LLMProvider = { async *stream() { yield "fresh"; } };
+    await expect(lifecycle.run(fresh, [])).resolves.toBeUndefined();
+    releaseSecond();
+    const freshResult = await lifecycle.run(fresh, []);
+    expect(freshResult?.text).toBe("fresh");
+    expect(lifecycle.canPublish(freshResult!)).toBe(true);
+    const releaseThird = lifecycle.suspendForInput();
+    expect(lifecycle.canPublish(freshResult!)).toBe(false);
+    releaseThird();
+    old.next.resolve({ done: true, value: undefined });
+    old.cleanup.resolve({ done: true, value: undefined });
+  });
+});

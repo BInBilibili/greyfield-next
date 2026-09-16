@@ -182,6 +182,7 @@ export class RuntimeService {
   private testingVoice = false;
   private lastInterruptedAtMs: number | undefined;
   private lastScreenAwarenessProactiveAtMs: number | undefined;
+  private lastScreenAwarenessAttemptAtMs: number | undefined;
   private readonly proactiveScreenLifecycle = new ProactiveScreenLifecycle();
   private screenAwarenessEnabled = true;
   private shuttingDown = false;
@@ -353,27 +354,40 @@ export class RuntimeService {
   }
 
   setScreenAwarenessEnabled(enabled: boolean): void {
-    if (this.screenAwarenessEnabled !== enabled) this.cancelProactiveScreenAwareness();
+    if (this.screenAwarenessEnabled !== enabled) {
+      this.cancelProactiveScreenAwareness();
+      // Explicit off/on starts a fresh screen mode, unlike ordinary input/config saves.
+      this.lastScreenAwarenessProactiveAtMs = undefined;
+    }
     this.screenAwarenessEnabled = enabled;
   }
 
-  /** Called before main awaits screen capture as well as by direct runtime callers. */
-  interruptProactiveScreenAwareness(input: RuntimeInputEvent): void {
-    if (["runtime.interrupt", "text.input", "audio.input", "audio.chunk", "audio.end"].includes(input.type)) {
-      this.cancelProactiveScreenAwareness();
+  /** Main reserves input priority before neko/capture awaits; direct callers do so in handle. */
+  beginUserInput(input: RuntimeInputEvent): () => void {
+    if (!["runtime.interrupt", "text.input", "audio.input", "audio.chunk", "audio.end"].includes(input.type)) {
+      return () => {};
     }
+    if (input.type === "runtime.interrupt") this.lastInterruptedAtMs = Date.now();
+    this.lastScreenAwarenessAttemptAtMs = undefined;
+    return this.proactiveScreenLifecycle.suspendForInput();
   }
 
   private cancelProactiveScreenAwareness(): void {
     this.proactiveScreenLifecycle.cancel();
-    this.lastScreenAwarenessProactiveAtMs = undefined;
+    // A cancelled attempt may retry, but an already published remark keeps its quiet interval.
+    this.lastScreenAwarenessAttemptAtMs = undefined;
   }
 
   async handle(input: RuntimeInputEvent, emit: RuntimeEventHandler): Promise<void> {
-    this.interruptProactiveScreenAwareness(input);
-    if (input.type === "runtime.interrupt") {
-      this.lastInterruptedAtMs = Date.now();
+    const release = this.beginUserInput(input);
+    try {
+      await this.handleInput(input, emit);
+    } finally {
+      release();
     }
+  }
+
+  private async handleInput(input: RuntimeInputEvent, emit: RuntimeEventHandler): Promise<void> {
     if (input.type === "runtime.interrupt" && this.activeRuntime) {
       const runtime = this.activeRuntime;
       try {
@@ -675,7 +689,7 @@ export class RuntimeService {
     if (this.shuttingDown || !this.screenAwarenessEnabled || !this.config.ui.proactiveMemoryEnabled || this.config.ui.proactivityLevel <= 0) {
       return { displayed: false, reason: "disabled" };
     }
-    if (this.activeRuntime) {
+    if (this.activeRuntime || this.proactiveScreenLifecycle.inputPending) {
       return { displayed: false, reason: "active_runtime" };
     }
     if (this.lastInterruptedAtMs !== undefined && Date.now() - this.lastInterruptedAtMs < proactiveInterruptCooldownMs) {
@@ -684,7 +698,9 @@ export class RuntimeService {
     if (this.proactiveScreenLifecycle.inFlight) {
       return { displayed: false, reason: "screen_awareness_in_flight" };
     }
-    if (this.lastScreenAwarenessProactiveAtMs !== undefined && Date.now() - this.lastScreenAwarenessProactiveAtMs < screenAwarenessProactiveCooldownMs) {
+    if ([this.lastScreenAwarenessProactiveAtMs, this.lastScreenAwarenessAttemptAtMs].some(
+      (at) => at !== undefined && Date.now() - at < screenAwarenessProactiveCooldownMs
+    )) {
       return { displayed: false, reason: "screen_awareness_cooldown" };
     }
     const attachments = input.attachments.filter((attachment) => attachment.dataUrl.startsWith(`data:${attachment.mimeType};base64,`));
@@ -705,7 +721,7 @@ export class RuntimeService {
       return { displayed: false, reason: "vision_model_not_ready" };
     }
 
-    this.lastScreenAwarenessProactiveAtMs = Date.now();
+    this.lastScreenAwarenessAttemptAtMs = Date.now();
     try {
       const messages: ChatMessage[] = [
         {

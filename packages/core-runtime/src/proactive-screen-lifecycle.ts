@@ -10,8 +10,19 @@ export class ProactiveScreenLifecycle {
   private generation = 0;
   private active: AbortController | undefined;
   private disposed = false;
+  private readonly inputHolds = new Set<symbol>();
 
   get inFlight(): boolean { return this.active !== undefined; }
+
+  get inputPending(): boolean { return this.inputHolds.size > 0; }
+
+  /** Reserve input priority before any asynchronous preparation; releases are identity-safe. */
+  suspendForInput(): () => void {
+    const hold = Symbol();
+    this.inputHolds.add(hold);
+    this.cancel();
+    return () => { this.inputHolds.delete(hold); };
+  }
 
   cancel(): void {
     this.generation += 1;
@@ -26,11 +37,11 @@ export class ProactiveScreenLifecycle {
   }
 
   canPublish(result: ProactiveScreenResult): boolean {
-    return !this.disposed && result.generation === this.generation;
+    return !this.disposed && !this.inputPending && result.generation === this.generation;
   }
 
   async run(provider: LLMProvider, messages: ChatMessage[]): Promise<ProactiveScreenResult | undefined> {
-    if (this.disposed || this.active) return undefined;
+    if (this.disposed || this.active || this.inputPending) return undefined;
     const controller = new AbortController();
     const generation = ++this.generation;
     this.active = controller;

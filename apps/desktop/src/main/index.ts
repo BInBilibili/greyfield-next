@@ -487,19 +487,23 @@ function attachHideOnClose(window: BrowserWindow | undefined, markDestroyed: () 
 }
 
 function handleRuntimeInput(payload: Parameters<NonNullable<typeof runtimeService>["handle"]>[0]): void {
-  runtimeService?.interruptProactiveScreenAwareness(payload);
+  const release = runtimeService?.beginUserInput(payload);
   void (async () => {
-    if (payload.type === "text.input" && nekoPlugin && ["starting", "connecting", "ready"].includes(nekoPlugin.getState().status)) {
-      await nekoPlugin.stop();
+    try {
+      if (payload.type === "text.input" && nekoPlugin && ["starting", "connecting", "ready"].includes(nekoPlugin.getState().status)) {
+        await nekoPlugin.stop();
+      }
+      const input =
+        (payload.type === "text.input" || payload.type === "audio.end") && observationController?.isEnabled()
+          ? {
+              ...payload,
+              ...(await observationController.ensureFreshContext())
+            }
+          : payload;
+      await runtimeIpcController?.handleRuntimeInput(input);
+    } finally {
+      release?.();
     }
-    const input =
-      (payload.type === "text.input" || payload.type === "audio.end") && observationController?.isEnabled()
-        ? {
-            ...payload,
-            ...(await observationController.ensureFreshContext())
-          }
-        : payload;
-    await runtimeIpcController?.handleRuntimeInput(input);
   })();
 }
 

@@ -43,7 +43,7 @@ function stalledProvider() {
   vi.spyOn(RuntimeProviderFactory.prototype, "createVisionLLMProvider").mockReturnValue(provider);
   return { pending, get signal() { return signal; } };
 }
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe("proactive screen cancellation integration", () => {
   it.each([
@@ -152,4 +152,89 @@ describe("proactive screen cancellation integration", () => {
     await service.shutdown();
   });
 
+});
+
+describe("proactive screen cooldown and input admission", () => {
+  it.each(["ordinary input", "unrelated config save"])("preserves successful-publication cooldown after %s", async (action) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-16T12:00:00Z"));
+    const stream = vi.fn(async function* () { yield "successful remark"; });
+    vi.spyOn(RuntimeProviderFactory.prototype, "createVisionLLMProvider").mockReturnValue({ stream });
+    const service = new RuntimeService(config);
+    try {
+      await expect(service.checkProactiveScreenAwareness(context())).resolves.toMatchObject({ displayed: true });
+      vi.setSystemTime(Date.now() + 1000);
+      if (action === "ordinary input") await service.handle({ type: "text.input", text: "hello" }, () => {});
+      else service.updateConfig({ ...config, ui: { ...config.ui, locale: "en-US" } });
+      await expect(service.checkProactiveScreenAwareness(context())).resolves.toMatchObject({ reason: "screen_awareness_cooldown" });
+      expect(stream).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(Date.now() + 299000);
+      await expect(service.checkProactiveScreenAwareness(context())).resolves.toMatchObject({ displayed: true });
+    } finally { await service.shutdown(); }
+  });
+
+  it("keeps explicit off/on fresh even after successful publication", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-16T12:00:00Z"));
+    vi.spyOn(RuntimeProviderFactory.prototype, "createVisionLLMProvider").mockReturnValue({ async *stream() { yield "fresh"; } });
+    const service = new RuntimeService(config);
+    try {
+      await expect(service.checkProactiveScreenAwareness(context())).resolves.toMatchObject({ displayed: true });
+      service.setScreenAwarenessEnabled(false);
+      service.setScreenAwarenessEnabled(true);
+      await expect(service.checkProactiveScreenAwareness(context())).resolves.toMatchObject({ displayed: true });
+    } finally { await service.shutdown(); }
+  });
+
+  it.each(["text.input", "audio.end"] as const)("blocks a tick while %s awaits external preparation", async (type) => {
+    const preparation = deferred<void>();
+    const stream = vi.fn(async function* () { yield "must not interrupt input preparation"; });
+    vi.spyOn(RuntimeProviderFactory.prototype, "createVisionLLMProvider").mockReturnValue({ stream });
+    const service = new RuntimeService(config);
+    const input: RuntimeInputEvent = type === "text.input" ? { type, text: "hello" } : { type };
+    // Reproduce main's synchronous input boundary followed by neko/capture await.
+    const release = service.beginUserInput(input);
+    const handling = (async () => {
+      try { await preparation.promise; await service.handle(input, () => {}); }
+      finally { release(); }
+    })();
+    try {
+      await expect(service.checkProactiveScreenAwareness(context())).resolves.toMatchObject({ reason: "active_runtime" });
+      expect(stream).not.toHaveBeenCalled();
+    } finally { preparation.resolve(); await handling; await service.shutdown(); }
+  });
+});
+
+describe("proactive screen input cleanup", () => {
+  it("allows retry after cancelled in-flight input without waiting for the old generator", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-16T12:00:00Z"));
+    const fixture = stalledProvider();
+    const service = new RuntimeService(config);
+    const old = service.checkProactiveScreenAwareness(context());
+    try {
+      await service.handle({ type: "text.input", text: "hello" }, () => {});
+      await expect(old).resolves.toMatchObject({ displayed: false });
+      vi.mocked(RuntimeProviderFactory.prototype.createVisionLLMProvider).mockReturnValue({ async *stream() { yield "retry"; } });
+      await expect(service.checkProactiveScreenAwareness(context())).resolves.toMatchObject({ displayed: true });
+    } finally { fixture.pending.resolve(); await service.shutdown(); }
+  });
+
+  it("reserves direct input during runtime creation and releases after creation failure", async () => {
+    const creation = deferred<void>();
+    const service = new RuntimeService(config);
+    // Controlled await at the real service creation boundary, before activeRuntime is assigned.
+    const create = vi.spyOn(service as unknown as { createRuntime(): Promise<unknown> }, "createRuntime")
+      .mockImplementation(async () => { await creation.promise; throw new Error("creation failed"); });
+    const handling = service.handle({ type: "text.input", text: "hello" }, () => {});
+    const rejected = expect(handling).rejects.toThrow("creation failed");
+    try {
+      expect(create).toHaveBeenCalledTimes(1);
+      await expect(service.checkProactiveScreenAwareness(context())).resolves.toMatchObject({ reason: "active_runtime" });
+      creation.resolve();
+      await rejected;
+      vi.spyOn(RuntimeProviderFactory.prototype, "createVisionLLMProvider").mockReturnValue({ async *stream() { yield "released"; } });
+      await expect(service.checkProactiveScreenAwareness(context())).resolves.toMatchObject({ displayed: true });
+    } finally { creation.resolve(); await rejected; await service.shutdown(); }
+  });
 });
