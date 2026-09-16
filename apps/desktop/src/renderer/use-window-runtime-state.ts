@@ -136,6 +136,7 @@ export function useWindowRuntimeState(params: {
     return Promise.resolve(applyState(bridge.updateSettings({ modelScale: 1, modelX: 0, modelY: 0 })));
   }
 
+  function testVision(): Promise<DesktopRendererState> { return Promise.resolve(applyState(bridge.testVisionProvider())); }
   function testLLM(): Promise<DesktopRendererState> { return Promise.resolve(applyState(bridge.testLLMProvider())); }
   function testVoice(): Promise<DesktopRendererState> { return Promise.resolve(applyState(bridge.testVoiceProvider())); }
   function requestPersona(): Promise<DesktopRendererState> { return Promise.resolve(applyState(bridge.requestPersona())); }
@@ -175,6 +176,7 @@ export function useWindowRuntimeState(params: {
     chooseModel,
     resetTransform,
     testLLM,
+    testVision,
     testVoice,
     requestPersona,
     updatePersonaField,

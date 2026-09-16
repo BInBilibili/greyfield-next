@@ -1,5 +1,8 @@
 import {
   GreyfieldRuntime,
+  ProviderDiagnostic,
+  VISION_DIAGNOSTIC_MESSAGES,
+  type ProviderDiagnosticResult,
   ProactiveScreenLifecycle,
   InMemorySessionStore,
   LLMBackedMemoryAtomExtractor,
@@ -179,6 +182,7 @@ export class RuntimeService {
   private providerFactory: RuntimeProviderFactory;
   private testingLLMGeneration: number | undefined;
   private providerTestGeneration = 0;
+  private readonly visionDiagnostic = new ProviderDiagnostic();
   private testingVoice = false;
   private lastInterruptedAtMs: number | undefined;
   private lastScreenAwarenessProactiveAtMs: number | undefined;
@@ -319,6 +323,7 @@ export class RuntimeService {
    */
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    this.visionDiagnostic.invalidate();
     this.proactiveScreenLifecycle.dispose();
     await this.options.webTools?.dispose?.().catch(() => {});
     if (this.memoryManagerV2) {
@@ -338,7 +343,9 @@ export class RuntimeService {
     this.cancelProactiveScreenAwareness();
     const previousThreadId = this.threadId;
     const previousProviderTestFingerprint = providerTestFingerprint(this.config);
+    const previousVisionFingerprint = visionTestFingerprint(this.config);
     this.config = mergeConfig(config);
+    if (visionTestFingerprint(this.config) !== previousVisionFingerprint) this.visionDiagnostic.invalidateRunning();
     if (providerTestFingerprint(this.config) !== previousProviderTestFingerprint) {
       this.invalidateProviderTest();
     }
@@ -872,6 +879,26 @@ export class RuntimeService {
     };
   }
 
+  invalidateVisionTest(): void { this.visionDiagnostic.invalidate(); }
+
+  async testVision(awaitSettings?: () => Promise<void>): Promise<ProviderDiagnosticResult | undefined> {
+    if (this.shuttingDown) return undefined;
+    const resolveProvider = (): LLMProvider | ProviderDiagnosticResult => {
+      const code = this.providerFactory.validateVisionDiagnostic();
+      if (code) return { ok: false, code };
+      return this.providerFactory.createVisionLLMProvider() ?? { ok: false, code: "model" };
+    };
+    if (awaitSettings) {
+      return this.visionDiagnostic.run(async () => {
+        try { await awaitSettings(); } catch { return { ok: false, code: "save" }; }
+        return resolveProvider();
+      }, VISION_DIAGNOSTIC_MESSAGES, this.options.llmTimeoutMs);
+    }
+    const provider = resolveProvider();
+    if (!("stream" in provider)) return provider;
+    return this.visionDiagnostic.run(provider, VISION_DIAGNOSTIC_MESSAGES, this.options.llmTimeoutMs);
+  }
+
   async testLLM(): Promise<LLMTestResult | undefined> {
     if (this.activeRuntime) {
       return {
@@ -1395,6 +1422,10 @@ export class RuntimeService {
   private redactSecretText(value: string): string {
     return redactSecretText(value, [this.config.provider.apiKey]);
   }
+}
+
+function visionTestFingerprint(config: GreyfieldConfig): string {
+  return JSON.stringify([config.provider.llm, config.provider.baseUrl, config.provider.apiKey, config.provider.taskModels.vision, config.provider.taskModels.multimodal]);
 }
 
 function providerTestFingerprint(config: GreyfieldConfig): string {

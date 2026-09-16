@@ -70,6 +70,7 @@
           :section-ref="setSectionRef('provider')"
           @update-setting="forwardSettingUpdate"
           @test-llm="$emit('test-llm')"
+          @test-vision="$emit('test-vision')"
         />
 
         <div v-show="pluginMarketplaceOpen" :ref="setSectionRef('plugins')" id="settings-section-plugins" tabindex="-1" data-settings-section="plugins">
@@ -673,6 +674,7 @@ const emit = defineEmits<{
   "choose-model": [];
   "reset-transform": [];
   "test-llm": [];
+  "test-vision": [];
   "test-voice": [];
   "request-persona": [];
   "update-persona-field": [key: PersonaTextField, value: string];

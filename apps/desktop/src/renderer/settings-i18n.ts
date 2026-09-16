@@ -8,6 +8,25 @@ export const settingsLocales: Array<{ value: SettingsLocale; label: string }> = 
 ];
 
 export type SettingsI18nKey =
+  | "vision.entry"
+  | "vision.detail"
+  | "vision.test"
+  | "vision.testing"
+  | "vision.received"
+  | "vision.preview"
+  | "vision.base-url"
+  | "vision.api-key"
+  | "vision.model"
+  | "vision.invalid-url"
+  | "vision.unauthorized"
+  | "vision.forbidden"
+  | "vision.not-found"
+  | "vision.unavailable"
+  | "vision.timeout"
+  | "vision.stream"
+  | "vision.empty"
+  | "vision.network"
+  | "vision.save"
   | "nav.label"
   | "nav.model"
   | "nav.voice"
@@ -387,6 +406,26 @@ const enUS: Record<SettingsI18nKey, string> = {
   "nav.startChat": "Start chatting",
   "nav.advanced": "Advanced settings",
   "advanced.taskModels": "Advanced task models",
+  "vision.entry": "Task models / Vision test",
+  "vision.detail": "Sends only a built-in blue sample image; never captures your screen or writes to chat or memory. Uses Vision, then Multimodal if Vision is empty.",
+  "vision.test": "Test vision model",
+  "vision.testing": "Testing vision…",
+  "vision.received": "Image request received a reply. This checks connectivity only, not image understanding.",
+  "vision.preview": "Preview mode does not test a remote vision model. Select OpenAI-compatible first.",
+  "vision.base-url": "Add a Base URL, then retry.",
+  "vision.api-key": "Add an API key, then retry.",
+  "vision.model": "Set Vision or Multimodal, then retry. Chat is not a vision fallback.",
+  "vision.invalid-url": "Use an HTTP(S) Base URL without embedded credentials, query or fragment, then retry.",
+  "vision.unauthorized": "Credentials were rejected (401). Check the API key and retry.",
+  "vision.forbidden": "Access denied (403). Check model access and retry.",
+  "vision.not-found": "Endpoint or vision model not found (404). Check the settings and retry.",
+  "vision.unavailable": "Provider unavailable (5xx). Retry later.",
+  "vision.timeout": "Vision test timed out. Check the connection and retry.",
+  "vision.stream": "Provider returned an invalid stream. Check compatibility and retry.",
+  "vision.empty": "No reply token received. Check vision support and retry.",
+  "vision.network": "Vision request failed. Check connection and model settings, then retry.",
+  "vision.save": "Settings could not be saved. Save successfully before retrying.",
+
   "advanced.settings": "Show advanced settings",
   "advanced.settings.close": "Hide advanced settings",
   "app.status": "Status",
@@ -424,15 +463,15 @@ const enUS: Record<SettingsI18nKey, string> = {
   "taskModel.utility.label": "Tools / helper",
   "taskModel.utility.detail": "Reserved for small helper/tool tasks; not used by current V1 tools yet.",
   "taskModel.memory.label": "Memory",
-  "taskModel.memory.detail": "Better memory can use this slot later; current extraction still falls back safely when provider config is incomplete.",
+  "taskModel.memory.detail": "Reserved for memory models. Long-term memory is paused; setting a model does not enable extraction or recall.",
   "taskModel.vision.label": "Vision / VLM",
-  "taskModel.vision.detail": "Screenshots and Screen awareness visual context use this model first.",
+  "taskModel.vision.detail": "Screen awareness uses this model first; this test sends only the built-in sample.",
   "taskModel.multimodal.label": "Multimodal",
   "taskModel.multimodal.detail": "Fallback for visual turns when Vision is empty; reserved for richer image/audio tasks.",
   "taskModel.voiceAsr.label": "Voice ASR",
   "taskModel.voiceAsr.detail": "Voice transcription model slot; provider wiring stays in Voice settings.",
   "taskModel.voiceTts.label": "Voice TTS",
-  "taskModel.voiceTts.detail": "Voice playback model slot; full ASR/TTS routing remains reserved.",
+  "taskModel.voiceTts.detail": "Speech output model; provider and voice controls remain in Voice settings.",
   "field.voice": "Voice",
   "field.speak": "Speak",
   "field.volume": "Volume",
@@ -495,7 +534,7 @@ const enUS: Record<SettingsI18nKey, string> = {
   "provider.model.label": "Needs model",
   "provider.model.detail": "Choose the provider model name before testing the LLM.",
   "provider.visionModel.label": "Vision not configured",
-  "provider.visionModel.detail": "Screen awareness needs a Vision model. Leave it empty to keep screenshots unavailable instead of sending them to the Chat model.",
+  "provider.visionModel.detail": "Screen awareness needs Vision or Multimodal. Test LLM checks only chat; use Task models / Vision test for images.",
   "provider.ready.label": "Ready to test",
   "provider.ready.detail": "Provider settings are complete. Run Test LLM before a real chat.",
   "experience.preview": "Preview mode",
@@ -755,6 +794,26 @@ const zhCN: Partial<Record<SettingsI18nKey, string>> = {
   "nav.startChat": "开始聊天",
   "nav.advanced": "高级设置",
   "advanced.taskModels": "高级任务模型",
+  "vision.entry": "任务模型 / 视觉测试",
+  "vision.detail": "仅发送内置蓝色示例图，不截取屏幕，不写入对话或记忆。优先使用视觉模型，留空时使用多模态模型。",
+  "vision.test": "测试视觉模型",
+  "vision.testing": "正在测试视觉…",
+  "vision.received": "图片请求已收到回复。仅验证连通性，不证明图像理解能力。",
+  "vision.preview": "试玩模式不会测试远程视觉模型，请先选择 OpenAI-compatible。",
+  "vision.base-url": "请填写 Base URL 后重试。",
+  "vision.api-key": "请填写 API key 后重试。",
+  "vision.model": "请填写视觉或多模态模型后重试。聊天模型不会作为视觉备选。",
+  "vision.invalid-url": "请使用不含内嵌凭据、查询参数或片段的 HTTP(S) Base URL 后重试。",
+  "vision.unauthorized": "凭据未通过（401），请检查 API key 后重试。",
+  "vision.forbidden": "访问被拒绝（403），请检查模型权限后重试。",
+  "vision.not-found": "接口或视觉模型不存在（404），请检查设置后重试。",
+  "vision.unavailable": "服务暂不可用（5xx），请稍后重试。",
+  "vision.timeout": "视觉测试超时，请检查连接后重试。",
+  "vision.stream": "服务返回的流格式异常，请检查兼容性后重试。",
+  "vision.empty": "未收到回复 token，请检查视觉支持后重试。",
+  "vision.network": "视觉请求失败，请检查连接和模型设置后重试。",
+  "vision.save": "设置未能保存，请保存成功后重试。",
+
   "advanced.settings": "展开高级设置",
   "advanced.settings.close": "收起高级设置",
   "app.status": "状态",
@@ -792,15 +851,15 @@ const zhCN: Partial<Record<SettingsI18nKey, string>> = {
   "taskModel.utility.label": "工具 / 辅助",
   "taskModel.utility.detail": "预留给小型工具和辅助任务；当前 V1 工具还不会直接调用。",
   "taskModel.memory.label": "记忆",
-  "taskModel.memory.detail": "预留给增强记忆模型；配置不完整或失败时仍诚实退回基础记忆。",
+  "taskModel.memory.detail": "预留的记忆模型槽位。长期记忆当前暂停，填写模型不会启用抽取或召回。",
   "taskModel.vision.label": "视觉 / VLM",
-  "taskModel.vision.detail": "截图和 Screen awareness 的画面上下文优先走这个模型。",
+  "taskModel.vision.detail": "屏幕感知优先使用此模型；本测试仅发送内置示例图。",
   "taskModel.multimodal.label": "多模态",
   "taskModel.multimodal.detail": "视觉槽位留空时作为画面输入的备选；更完整的图像/音频任务仍是预留。",
   "taskModel.voiceAsr.label": "语音 ASR",
   "taskModel.voiceAsr.detail": "语音转文字模型槽位；provider 开关仍在语音设置里。",
   "taskModel.voiceTts.label": "语音 TTS",
-  "taskModel.voiceTts.detail": "语音播放模型槽位；完整语音 provider 路由暂不扩展。",
+  "taskModel.voiceTts.detail": "回复朗读使用的模型；服务类型和音色仍在语音设置中配置。",
   "field.voice": "音色",
   "field.speak": "朗读",
   "field.volume": "音量",
@@ -863,7 +922,7 @@ const zhCN: Partial<Record<SettingsI18nKey, string>> = {
   "provider.model.label": "需要模型",
   "provider.model.detail": "测试 LLM 前，请先填写模型名称。",
   "provider.visionModel.label": "未配置视觉模型",
-  "provider.visionModel.detail": "屏幕感知需要单独的视觉模型。留空时不会把截图发给聊天模型。",
+  "provider.visionModel.detail": "屏幕感知需要视觉或多模态模型。测试 LLM 只检查聊天；图片请求请使用“任务模型 / 视觉测试”。",
   "provider.ready.label": "可以测试",
   "provider.ready.detail": "模型服务配置已完整。真实聊天前建议先运行 Test LLM。",
   "experience.preview": "试玩模式",

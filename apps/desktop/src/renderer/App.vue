@@ -56,6 +56,7 @@
     @choose-model="chooseModel"
     @reset-transform="resetTransform"
     @test-llm="testLLM"
+    @test-vision="testVision"
     @test-voice="testVoice"
     @request-persona="requestPersona"
     @update-persona-field="updatePersonaField"
@@ -118,6 +119,7 @@ const {
   chooseModel,
   resetTransform,
   testLLM,
+  testVision,
   testVoice,
   requestPersona,
   updatePersonaField,

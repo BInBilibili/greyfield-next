@@ -8,11 +8,13 @@ describe("createGreyfieldDesktopApi", () => {
 
     api.send("window:set-click-through", { enabled: true });
     api.send("provider:test-llm", {});
+    api.send("provider:test-vision", { requestId: "vision-1" });
     api.send("memory:atom-update", { id: "atom-1", text: "Edited atom memory." });
     api.send("screen-awareness:set-enabled", { enabled: true });
 
     expect(send).toHaveBeenCalledWith("window:set-click-through", { enabled: true });
     expect(send).toHaveBeenCalledWith("provider:test-llm", {});
+    expect(send).toHaveBeenCalledWith("provider:test-vision", { requestId: "vision-1" });
     expect(send).toHaveBeenCalledWith("memory:atom-update", { id: "atom-1", text: "Edited atom memory." });
     expect(send).toHaveBeenCalledWith("screen-awareness:set-enabled", { enabled: true });
   });
