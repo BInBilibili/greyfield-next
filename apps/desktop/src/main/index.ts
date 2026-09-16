@@ -97,6 +97,7 @@ async function createWindows(): Promise<void> {
     service: runtimeService,
     broadcast: broadcastRuntimeEvent
   });
+  runtimeService.setScreenAwarenessEnabled(false);
   observationController = new ObservationController({
     captureSource: new ElectronScreenCaptureSource(),
     broadcast: broadcastScreenAwarenessState,
@@ -350,6 +351,7 @@ function registerIpc(): void {
   });
 
   ipcMain.on("screen-awareness:set-enabled", (_event, payload) => {
+    runtimeService?.setScreenAwarenessEnabled(payload.enabled);
     void observationController?.setEnabled(payload.enabled);
   });
 
@@ -485,6 +487,7 @@ function attachHideOnClose(window: BrowserWindow | undefined, markDestroyed: () 
 }
 
 function handleRuntimeInput(payload: Parameters<NonNullable<typeof runtimeService>["handle"]>[0]): void {
+  runtimeService?.interruptProactiveScreenAwareness(payload);
   void (async () => {
     if (payload.type === "text.input" && nekoPlugin && ["starting", "connecting", "ready"].includes(nekoPlugin.getState().status)) {
       await nekoPlugin.stop();
@@ -677,17 +680,18 @@ async function checkProactiveMemory(payload: DesktopProactiveCheckRequest): Prom
 }
 
 async function checkProactiveScreenAwareness(visualContext: ObservationRuntimePayload): Promise<boolean> {
-  if (getUsableWindow(settingsWindow)?.isVisible()) {
+  if (!observationController?.isEnabled() || getUsableWindow(settingsWindow)?.isVisible()) {
     return false;
   }
+  let published = false;
   try {
-    const screenAwareResult = await runtimeService?.checkProactiveScreenAwareness(visualContext);
-    const window = getUsableWindow(petWindow);
-    if (!screenAwareResult?.message || !window) {
-      return false;
-    }
-    window.webContents.send("proactive:message", screenAwareResult.message);
-    return true;
+    await runtimeService?.checkProactiveScreenAwareness(visualContext, (message) => {
+      const window = getUsableWindow(petWindow);
+      if (!window || !observationController?.isEnabled() || getUsableWindow(settingsWindow)?.isVisible()) return;
+      window.webContents.send("proactive:message", message);
+      published = true;
+    });
+    return published;
   } catch (error) {
     console.warn("[ScreenAwareness] Proactive screen-awareness check failed:", error);
     return false;

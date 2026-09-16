@@ -42,6 +42,7 @@
     "harness:electron:memory-control": "pnpm build:desktop && tsx packages/dev-harness/src/electron-memory-control-check.ts",
     "harness:electron:memory-atom-library": "pnpm build:desktop && tsx packages/dev-harness/src/electron-memory-atom-library-check.ts",
     "harness:electron:visual-observation": "pnpm build:desktop && tsx packages/dev-harness/src/electron-visual-observation-check.ts",
+    "harness:electron:screen-cancel": "pnpm build:desktop && tsx packages/dev-harness/src/electron-screen-cancel-check.ts",
     "harness:electron:screen-help": "pnpm build:desktop && tsx packages/dev-harness/src/electron-screen-help-check.ts",
     "harness:chrome:research": "tsx packages/dev-harness/src/chrome-research-check.ts",
     "harness:electron:proactive-desktop-message": "pnpm build:desktop && tsx packages/dev-harness/src/electron-proactive-desktop-message-check.ts",
